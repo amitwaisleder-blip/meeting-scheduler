@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Overlap · Meeting Scheduler</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --panel: #181b24;
+    --panel-2: #1f2330;
+    --line: #2a2f3d;
+    --text: #e6e9ef;
+    --muted: #9aa3b2;
+    --accent: #6366f1;
+    --accent-soft: #818cf8;
+    --good: #22c55e;
+    --radius: 12px;
+    --shadow: 0 8px 30px rgba(0,0,0,.35);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: radial-gradient(1200px 600px at 80% -10%, #1b2030 0%, var(--bg) 55%);
+    color: var(--text);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 28px 24px 64px; }
+
+  header.app { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 6px; }
+  header.app h1 { font-size: 26px; margin: 0; letter-spacing: -0.02em; }
+  header.app .logo {
+    display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: 9px;
+    background: linear-gradient(135deg, var(--accent), var(--accent-soft)); font-weight: 700; color: white;
+    box-shadow: var(--shadow); align-self: center;
+  }
+  header.app p { color: var(--muted); margin: 0; font-size: 14px; }
+
+  .layout { display: grid; grid-template-columns: 300px 1fr; gap: 22px; margin-top: 22px; align-items: start; }
+  @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 18px; box-shadow: var(--shadow);
+  }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 14px; }
+
+  /* People panel */
+  .add-row { display: flex; gap: 8px; margin-bottom: 14px; }
+  input[type="text"] {
+    flex: 1; min-width: 0; background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 9px; padding: 10px 12px; font-size: 14px; outline: none; transition: border-color .15s, box-shadow .15s;
+  }
+  input[type="text"]:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(99,102,241,.18); }
+  button {
+    border: 0; cursor: pointer; font-size: 14px; font-weight: 600; border-radius: 9px; padding: 10px 14px;
+    background: var(--accent); color: white; transition: filter .15s, transform .05s;
+  }
+  button:hover { filter: brightness(1.08); }
+  button:active { transform: translateY(1px); }
+  button.ghost { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); }
+  button.icon { padding: 6px 9px; background: transparent; color: var(--muted); }
+  button.icon:hover { color: var(--text); }
+
+  .people { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+  .person {
+    display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 10px;
+    border: 1px solid transparent; background: var(--panel-2); cursor: pointer; transition: border-color .15s, background .15s;
+  }
+  .person:hover { border-color: var(--line); }
+  .person.active { border-color: var(--accent); background: rgba(99,102,241,.12); }
+  .swatch { width: 14px; height: 14px; border-radius: 4px; flex: none; }
+  .person .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; font-size: 14px; }
+  .person .count { font-size: 12px; color: var(--muted); }
+  .person .del { opacity: 0; }
+  .person:hover .del { opacity: 1; }
+  .empty { color: var(--muted); font-size: 13px; padding: 8px 2px; }
+
+  .hint {
+    margin-top: 14px; font-size: 12.5px; color: var(--muted); padding: 10px 12px;
+    background: var(--panel-2); border-radius: 9px; border: 1px solid var(--line);
+  }
+  .hint b { color: var(--text); }
+
+  /* Grid */
+  .grid-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; gap: 12px; flex-wrap: wrap; }
+  .grid-head .editing { font-size: 13px; color: var(--muted); }
+  .grid-head .editing b { color: var(--accent-soft); }
+
+  .schedule { width: 100%; border-collapse: separate; border-spacing: 0; user-select: none; }
+  .schedule th { font-size: 12px; color: var(--muted); font-weight: 600; padding: 6px 4px; text-align: center; }
+  .schedule th.time-col { width: 64px; text-align: right; padding-right: 10px; }
+  .schedule td.time-label { font-size: 11.5px; color: var(--muted); text-align: right; padding-right: 10px; white-space: nowrap; vertical-align: middle; }
+
+  .cell {
+    height: 38px; border-radius: 7px; border: 1px solid var(--line); background: var(--panel-2);
+    cursor: pointer; position: relative; transition: background .12s, border-color .12s, transform .05s;
+    text-align: center; vertical-align: middle;
+  }
+  td.cellwrap { padding: 3px; }
+  .cell:hover { border-color: var(--accent-soft); }
+  .cell .num { font-size: 12px; font-weight: 700; color: rgba(255,255,255,.92); pointer-events: none; }
+  .cell.mine { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .cell.mine::after {
+    content: "✓"; position: absolute; top: 2px; right: 5px; font-size: 10px; color: var(--accent-soft); font-weight: 700;
+  }
+  .cell.best { box-shadow: 0 0 0 2px var(--good) inset; }
+
+  .legend { display: flex; align-items: center; gap: 10px; margin-top: 16px; font-size: 12px; color: var(--muted); }
+  .legend .scale { display: flex; height: 12px; border-radius: 6px; overflow: hidden; width: 160px; border: 1px solid var(--line); }
+  .legend .scale span { flex: 1; }
+
+  /* Best times */
+  .best-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+  .best-item {
+    display: flex; align-items: center; gap: 12px; padding: 11px 12px; border-radius: 10px;
+    background: var(--panel-2); border: 1px solid var(--line);
+  }
+  .best-item .rank {
+    width: 26px; height: 26px; flex: none; border-radius: 7px; display: grid; place-items: center;
+    font-weight: 700; font-size: 13px; background: var(--accent); color: white;
+  }
+  .best-item.top .rank { background: var(--good); }
+  .best-item .when { flex: 1; font-weight: 600; font-size: 14px; }
+  .best-item .who { font-size: 12px; color: var(--muted); }
+  .best-item .tally { font-size: 13px; font-weight: 700; color: var(--good); white-space: nowrap; }
+  .best-empty { color: var(--muted); font-size: 13px; }
+
+  footer { margin-top: 26px; color: var(--muted); font-size: 12px; text-align: center; }
+  footer a { color: var(--accent-soft); text-decoration: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="app">
+    <span class="logo">◷</span>
+    <h1>Overlap</h1>
+    <p>Find the time that works for everyone.</p>
+  </header>
+
+  <div class="layout">
+    <!-- LEFT: people + controls -->
+    <div>
+      <div class="card">
+        <h2>People</h2>
+        <form id="add-form" class="add-row" autocomplete="off">
+          <input type="text" id="name-input" placeholder="Add a name…" maxlength="40" />
+          <button type="submit">Add</button>
+        </form>
+        <ul class="people" id="people-list"></ul>
+        <div class="hint" id="hint">
+          Click <b>your name</b> (or add it), then click or drag across the grid to
+          mark when you're free. Hit <b>🔗 Share link</b> to send everyone a link that
+          carries the whole group's availability — they open it, click their own name,
+          add their times, and re-share.
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:18px;">
+        <h2>Best times to meet</h2>
+        <ul class="best-list" id="best-list"></ul>
+      </div>
+    </div>
+
+    <!-- RIGHT: grid -->
+    <div class="card">
+      <div class="grid-head">
+        <div class="editing" id="editing-label">Add or select a person to edit availability</div>
+        <div style="display:flex; gap:8px;">
+          <button id="share-btn" title="Copy a link that carries everyone's availability">🔗 Share link</button>
+          <button class="ghost" id="clear-btn" title="Remove everyone and start over">Reset all</button>
+        </div>
+      </div>
+      <table class="schedule" id="schedule"></table>
+      <div class="legend">
+        <span>Fewer free</span>
+        <div class="scale" id="legend-scale"></div>
+        <span>Everyone free</span>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    All data stays in your browser (localStorage). · <a href="#" id="export-link">Copy summary</a>
+  </footer>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---- Configuration ----------------------------------------------------
+  var DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"];
+  var START_HOUR = 9;   // 9am
+  var END_HOUR = 18;    // 6pm (slots are 9–10 … 17–18)
+  var STORAGE_KEY = "overlap.scheduler.v1";
+  var PALETTE = [
+    "#6366f1", "#ec4899", "#f59e0b", "#10b981", "#06b6d4",
+    "#8b5cf6", "#ef4444", "#84cc16", "#f43f5e", "#14b8a6",
+    "#a855f7", "#eab308"
+  ];
+
+  // ---- State ------------------------------------------------------------
+  // people: [{id, name, color}]
+  // avail:  { personId: { "Day-Hour": true } }
+  var state = load() || { people: [], avail: {}, activeId: null };
+
+  // ---- Persistence ------------------------------------------------------
+  function save() {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) {}
+  }
+  function load() {
+    try {
+      var raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return null;
+      var data = JSON.parse(raw);
+      if (!data || !Array.isArray(data.people)) return null;
+      data.avail = data.avail || {};
+      return data;
+    } catch (e) { return null; }
+  }
+
+  // ---- Share-link encoding ----------------------------------------------
+  // The full schedule is packed into the URL hash (#s=…) so it can be passed
+  // from person to person with no server. Opening a link merges its data into
+  // whatever is already here, deduping people by name and unioning slots — so
+  // everyone clicks their own name, adds their times, and re-shares.
+  function b64urlEncode(s) {
+    return btoa(unescape(encodeURIComponent(s)))
+      .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+  function b64urlDecode(s) {
+    s = s.replace(/-/g, "+").replace(/_/g, "/");
+    while (s.length % 4) s += "=";
+    return decodeURIComponent(escape(atob(s)));
+  }
+  function encodeState(st) {
+    var compact = {
+      p: st.people.map(function (p) { return { n: p.name, c: p.color }; }),
+      a: st.people.map(function (p) {
+        var bag = st.avail[p.id] || {};
+        return Object.keys(bag).map(function (k) {
+          var parts = k.split("-");
+          var di = DAYS.indexOf(parts[0]);
+          return di * 100 + parseInt(parts[1], 10); // dayIdx*100 + hour
+        });
+      })
+    };
+    return b64urlEncode(JSON.stringify(compact));
+  }
+  function decodeState(str) {
+    var c = JSON.parse(b64urlDecode(str));
+    var people = [], avail = {};
+    (c.p || []).forEach(function (pp, i) {
+      var id = uid();
+      people.push({ id: id, name: pp.n, color: pp.c || PALETTE[i % PALETTE.length] });
+      var bag = {};
+      (c.a[i] || []).forEach(function (n) {
+        var di = Math.floor(n / 100), h = n % 100;
+        if (DAYS[di]) bag[slotKey(DAYS[di], h)] = true;
+      });
+      avail[id] = bag;
+    });
+    return { people: people, avail: avail };
+  }
+  function mergeIncoming(incoming) {
+    incoming.people.forEach(function (ip) {
+      var slots = incoming.avail[ip.id] || {};
+      var existing = state.people.find(function (p) {
+        return p.name.toLowerCase() === ip.name.toLowerCase();
+      });
+      if (existing) {
+        var bag = state.avail[existing.id] || (state.avail[existing.id] = {});
+        Object.keys(slots).forEach(function (k) { bag[k] = true; });
+      } else {
+        var np = { id: uid(), name: ip.name, color: nextColor() };
+        state.people.push(np);
+        state.avail[np.id] = Object.assign({}, slots);
+      }
+    });
+  }
+  function shareUrl() {
+    return location.origin + location.pathname + "#s=" + encodeState(state);
+  }
+
+  // ---- Helpers ----------------------------------------------------------
+  function uid() { return "p" + Math.random().toString(36).slice(2, 9); }
+  function slotKey(day, hour) { return day + "-" + hour; }
+  function nextColor() {
+    var used = state.people.map(function (p) { return p.color; });
+    for (var i = 0; i < PALETTE.length; i++) {
+      if (used.indexOf(PALETTE[i]) === -1) return PALETTE[i];
+    }
+    return PALETTE[state.people.length % PALETTE.length];
+  }
+  function fmtHour(h) {
+    var ampm = h < 12 ? "am" : "pm";
+    var hr = h % 12; if (hr === 0) hr = 12;
+    return hr + ampm;
+  }
+  function slotLabel(day, hour) {
+    return day + " " + fmtHour(hour) + "–" + fmtHour(hour + 1);
+  }
+  function activePerson() {
+    return state.people.find(function (p) { return p.id === state.activeId; }) || null;
+  }
+
+  // Count how many people are free for a given slot, plus who.
+  function tallyForSlot(day, hour) {
+    var key = slotKey(day, hour);
+    var names = [];
+    state.people.forEach(function (p) {
+      if (state.avail[p.id] && state.avail[p.id][key]) names.push(p.name);
+    });
+    return names;
+  }
+
+  // ---- DOM references ---------------------------------------------------
+  var peopleList = document.getElementById("people-list");
+  var scheduleEl = document.getElementById("schedule");
+  var bestListEl = document.getElementById("best-list");
+  var editingLabel = document.getElementById("editing-label");
+  var nameInput = document.getElementById("name-input");
+
+  // ---- Heatmap color ----------------------------------------------------
+  function heatColor(count, total) {
+    if (count === 0 || total === 0) return "";
+    var t = count / total;                 // 0..1
+    // Interpolate from a dim indigo to a vivid green as overlap grows.
+    var a = 0.18 + t * 0.72;
+    // Blend indigo (99,102,241) -> green (34,197,94)
+    var r = Math.round(99 + (34 - 99) * t);
+    var g = Math.round(102 + (197 - 102) * t);
+    var b = Math.round(241 + (94 - 241) * t);
+    return "rgba(" + r + "," + g + "," + b + "," + a.toFixed(3) + ")";
+  }
+
+  // ---- Render: people ---------------------------------------------------
+  function renderPeople() {
+    peopleList.innerHTML = "";
+    if (state.people.length === 0) {
+      var li = document.createElement("li");
+      li.className = "empty";
+      li.textContent = "No one yet — add the first person above.";
+      peopleList.appendChild(li);
+      return;
+    }
+    state.people.forEach(function (p) {
+      var count = Object.keys(state.avail[p.id] || {}).length;
+      var li = document.createElement("li");
+      li.className = "person" + (p.id === state.activeId ? " active" : "");
+      li.dataset.id = p.id;
+
+      var sw = document.createElement("span");
+      sw.className = "swatch";
+      sw.style.background = p.color;
+
+      var name = document.createElement("span");
+      name.className = "name";
+      name.textContent = p.name;
+
+      var cnt = document.createElement("span");
+      cnt.className = "count";
+      cnt.textContent = count + (count === 1 ? " slot" : " slots");
+
+      var del = document.createElement("button");
+      del.className = "icon del";
+      del.title = "Remove " + p.name;
+      del.textContent = "✕";
+      del.addEventListener("click", function (e) {
+        e.stopPropagation();
+        removePerson(p.id);
+      });
+
+      li.appendChild(sw);
+      li.appendChild(name);
+      li.appendChild(cnt);
+      li.appendChild(del);
+      li.addEventListener("click", function () { setActive(p.id); });
+      peopleList.appendChild(li);
+    });
+  }
+
+  // ---- Render: grid -----------------------------------------------------
+  function renderGrid() {
+    var total = state.people.length;
+    var active = activePerson();
+    editingLabel.innerHTML = active
+      ? "Editing availability for <b>" + escapeHtml(active.name) + "</b>"
+      : "Add or select a person to edit availability";
+
+    // Find the max overlap so we can flag the best slots.
+    var maxCount = 0;
+    for (var d = 0; d < DAYS.length; d++) {
+      for (var h = START_HOUR; h < END_HOUR; h++) {
+        var c = tallyForSlot(DAYS[d], h).length;
+        if (c > maxCount) maxCount = c;
+      }
+    }
+
+    var html = "<thead><tr><th class='time-col'></th>";
+    DAYS.forEach(function (day) { html += "<th>" + day + "</th>"; });
+    html += "</tr></thead><tbody>";
+
+    for (var hour = START_HOUR; hour < END_HOUR; hour++) {
+      html += "<tr><td class='time-label'>" + fmtHour(hour) + "</td>";
+      for (var di = 0; di < DAYS.length; di++) {
+        var day = DAYS[di];
+        var key = slotKey(day, hour);
+        var names = tallyForSlot(day, hour);
+        var count = names.length;
+        var mine = active && state.avail[active.id] && state.avail[active.id][key];
+        var isBest = maxCount > 1 && count === maxCount;
+        var classes = "cell" + (mine ? " mine" : "") + (isBest ? " best" : "");
+        var bg = heatColor(count, total);
+        var style = bg ? " style='background:" + bg + "'" : "";
+        var title = count + " of " + total + " free" + (names.length ? " — " + names.join(", ") : "");
+        html += "<td class='cellwrap'><div class='" + classes + "' data-day='" + day +
+                "' data-hour='" + hour + "'" + style + " title='" + escapeHtml(title) + "'>" +
+                (count > 0 ? "<span class='num'>" + count + "</span>" : "") +
+                "</div></td>";
+      }
+      html += "</tr>";
+    }
+    html += "</tbody>";
+    scheduleEl.innerHTML = html;
+  }
+
+  // ---- Render: best times ----------------------------------------------
+  function renderBest() {
+    var total = state.people.length;
+    var slots = [];
+    for (var di = 0; di < DAYS.length; di++) {
+      for (var h = START_HOUR; h < END_HOUR; h++) {
+        var names = tallyForSlot(DAYS[di], h);
+        if (names.length > 0) {
+          slots.push({ day: DAYS[di], dayIdx: di, hour: h, names: names, count: names.length });
+        }
+      }
+    }
+    slots.sort(function (a, b) {
+      if (b.count !== a.count) return b.count - a.count;
+      if (a.dayIdx !== b.dayIdx) return a.dayIdx - b.dayIdx;
+      return a.hour - b.hour;
+    });
+
+    bestListEl.innerHTML = "";
+    if (slots.length === 0) {
+      var li = document.createElement("li");
+      li.className = "best-empty";
+      li.textContent = total === 0
+        ? "Add people and mark availability to see the best meeting times."
+        : "No availability marked yet.";
+      bestListEl.appendChild(li);
+      return;
+    }
+
+    var topCount = slots[0].count;
+    slots.slice(0, 6).forEach(function (s, i) {
+      var li = document.createElement("li");
+      li.className = "best-item" + (s.count === topCount ? " top" : "");
+
+      var rank = document.createElement("span");
+      rank.className = "rank";
+      rank.textContent = i + 1;
+
+      var mid = document.createElement("div");
+      mid.style.flex = "1";
+      mid.style.minWidth = "0";
+      var when = document.createElement("div");
+      when.className = "when";
+      when.textContent = slotLabel(s.day, s.hour);
+      var who = document.createElement("div");
+      who.className = "who";
+      who.textContent = s.names.join(", ");
+      mid.appendChild(when);
+      mid.appendChild(who);
+
+      var tally = document.createElement("span");
+      tally.className = "tally";
+      tally.textContent = s.count + "/" + total;
+
+      li.appendChild(rank);
+      li.appendChild(mid);
+      li.appendChild(tally);
+      bestListEl.appendChild(li);
+    });
+  }
+
+  function renderAll() {
+    renderPeople();
+    renderGrid();
+    renderBest();
+    save();
+  }
+
+  // ---- Actions ----------------------------------------------------------
+  function addPerson(name) {
+    name = (name || "").trim();
+    if (!name) return;
+    var person = { id: uid(), name: name, color: nextColor() };
+    state.people.push(person);
+    state.avail[person.id] = state.avail[person.id] || {};
+    state.activeId = person.id; // newly added person becomes the one you're editing
+    renderAll();
+  }
+
+  function removePerson(id) {
+    state.people = state.people.filter(function (p) { return p.id !== id; });
+    delete state.avail[id];
+    if (state.activeId === id) {
+      state.activeId = state.people.length ? state.people[state.people.length - 1].id : null;
+    }
+    renderAll();
+  }
+
+  function setActive(id) {
+    state.activeId = (state.activeId === id) ? state.activeId : id;
+    renderAll();
+  }
+
+  function toggleSlot(day, hour, forceValue) {
+    var active = activePerson();
+    if (!active) return false;
+    var bag = state.avail[active.id] || (state.avail[active.id] = {});
+    var key = slotKey(day, hour);
+    var newVal = (typeof forceValue === "boolean") ? forceValue : !bag[key];
+    if (newVal) bag[key] = true; else delete bag[key];
+    return newVal;
+  }
+
+  // ---- Drag-to-paint interaction ---------------------------------------
+  var dragging = false;
+  var dragValue = null; // the value we're painting during a drag
+
+  scheduleEl.addEventListener("mousedown", function (e) {
+    var cell = e.target.closest(".cell");
+    if (!cell) return;
+    if (!activePerson()) { flashHint(); return; }
+    e.preventDefault();
+    dragging = true;
+    var day = cell.dataset.day, hour = parseInt(cell.dataset.hour, 10);
+    dragValue = toggleSlot(day, hour);
+    renderAll();
+  });
+
+  scheduleEl.addEventListener("mouseover", function (e) {
+    if (!dragging) return;
+    var cell = e.target.closest(".cell");
+    if (!cell) return;
+    var day = cell.dataset.day, hour = parseInt(cell.dataset.hour, 10);
+    toggleSlot(day, hour, dragValue);
+    renderAll();
+  });
+
+  document.addEventListener("mouseup", function () {
+    if (dragging) { dragging = false; dragValue = null; }
+  });
+
+  // Touch support: tap a cell to toggle it.
+  scheduleEl.addEventListener("touchstart", function (e) {
+    var t = e.touches[0];
+    var el = document.elementFromPoint(t.clientX, t.clientY);
+    var cell = el && el.closest ? el.closest(".cell") : null;
+    if (!cell) return;
+    if (!activePerson()) { flashHint(); return; }
+    e.preventDefault();
+    toggleSlot(cell.dataset.day, parseInt(cell.dataset.hour, 10));
+    renderAll();
+  }, { passive: false });
+
+  // ---- Misc UI ----------------------------------------------------------
+  document.getElementById("add-form").addEventListener("submit", function (e) {
+    e.preventDefault();
+    addPerson(nameInput.value);
+    nameInput.value = "";
+    nameInput.focus();
+  });
+
+  document.getElementById("clear-btn").addEventListener("click", function () {
+    if (!state.people.length) return;
+    if (confirm("Remove everyone and clear all availability?")) {
+      state = { people: [], avail: {}, activeId: null };
+      renderAll();
+    }
+  });
+
+  document.getElementById("share-btn").addEventListener("click", function (e) {
+    var btn = e.currentTarget;
+    if (!state.people.length) { flashHint(); return; }
+    var url = shareUrl();
+    function done(label) {
+      var orig = "🔗 Share link";
+      btn.textContent = label;
+      setTimeout(function () { btn.textContent = orig; }, 1600);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(url).then(
+        function () { done("✓ Link copied"); },
+        function () { prompt("Copy this link to share:", url); }
+      );
+    } else {
+      prompt("Copy this link to share:", url);
+    }
+  });
+
+  document.getElementById("export-link").addEventListener("click", function (e) {
+    e.preventDefault();
+    var total = state.people.length;
+    var lines = ["Best times to meet (" + total + " people):"];
+    var slots = [];
+    for (var di = 0; di < DAYS.length; di++) {
+      for (var h = START_HOUR; h < END_HOUR; h++) {
+        var names = tallyForSlot(DAYS[di], h);
+        if (names.length) slots.push({ day: DAYS[di], dayIdx: di, hour: h, names: names });
+      }
+    }
+    slots.sort(function (a, b) {
+      if (b.names.length !== a.names.length) return b.names.length - a.names.length;
+      if (a.dayIdx !== b.dayIdx) return a.dayIdx - b.dayIdx;
+      return a.hour - b.hour;
+    });
+    slots.slice(0, 6).forEach(function (s, i) {
+      lines.push((i + 1) + ". " + slotLabel(s.day, s.hour) + " — " +
+                 s.names.length + "/" + total + " (" + s.names.join(", ") + ")");
+    });
+    var text = lines.join("\n");
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () {
+        e.target.textContent = "Copied!";
+        setTimeout(function () { e.target.textContent = "Copy summary"; }, 1500);
+      });
+    } else {
+      alert(text);
+    }
+  });
+
+  var hintEl = document.getElementById("hint");
+  function flashHint() {
+    hintEl.style.transition = "background .15s";
+    hintEl.style.background = "rgba(99,102,241,.25)";
+    setTimeout(function () { hintEl.style.background = ""; }, 350);
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  // ---- Legend scale -----------------------------------------------------
+  (function buildLegend() {
+    var scale = document.getElementById("legend-scale");
+    var steps = 6;
+    for (var i = 1; i <= steps; i++) {
+      var span = document.createElement("span");
+      span.style.background = heatColor(i, steps) || "var(--panel-2)";
+      scale.appendChild(span);
+    }
+  })();
+
+  // ---- Import a shared link, if present ---------------------------------
+  (function importFromUrl() {
+    var m = location.hash.match(/[#&]s=([^&]+)/);
+    if (!m) return;
+    try {
+      mergeIncoming(decodeState(m[1]));
+      if (!activePerson() && state.people.length) {
+        state.activeId = state.people[state.people.length - 1].id;
+      }
+      // Strip the payload so a refresh doesn't re-import it.
+      history.replaceState(null, "", location.pathname + location.search);
+    } catch (err) {
+      console.warn("Could not read shared link:", err);
+    }
+  })();
+
+  // ---- Go ---------------------------------------------------------------
+  renderAll();
+})();
+</script>
+</body>
+</html>

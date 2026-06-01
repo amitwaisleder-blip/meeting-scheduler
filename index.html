@@ -187,6 +187,7 @@
   details.email-setup summary::before { content: "⚙ "; }
   .cfg-grid { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
   .cfg-grid label { font-size: 11.5px; color: var(--muted); font-weight: 600; display: flex; flex-direction: column; gap: 4px; }
+  .cfg-test { margin-top: 12px; border-top: 1px dashed var(--line); padding-top: 12px; }
   .cfg-help { font-size: 11.5px; color: var(--muted); margin-top: 8px; line-height: 1.5; }
   .cfg-help a { color: var(--accent); }
   .cfg-help code { background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-size: 11px; }
@@ -263,6 +264,14 @@
             <label>Template ID <input type="text" id="cfg-template" placeholder="template_xxxxxxx" /></label>
             <label>Public key <input type="text" id="cfg-key" placeholder="xxxxxxxxxxxxxxxx" /></label>
             <button class="sm" id="cfg-save">Save keys</button>
+          </div>
+          <div class="cfg-test">
+            <label style="font-size:11.5px;color:var(--muted);font-weight:600;">Test the setup</label>
+            <div class="names" style="display:flex;gap:8px;margin-top:4px;">
+              <input type="email" id="cfg-test-email" placeholder="your@email.com" maxlength="120" />
+              <button class="ghost sm" id="cfg-test-btn">Send test</button>
+            </div>
+            <div style="font-size:11.5px;color:var(--muted);margin-top:6px;">Sends one sample reminder to this address so you can check the template.</div>
           </div>
           <div class="cfg-help">
             Create a free account at <a href="https://www.emailjs.com" target="_blank" rel="noopener">emailjs.com</a>,
@@ -736,6 +745,34 @@
     })(0);
   }
 
+  function sendTest() {
+    // Read straight from the form so it works even before "Save keys".
+    var serviceId = document.getElementById("cfg-service").value.trim();
+    var templateId = document.getElementById("cfg-template").value.trim();
+    var publicKey = document.getElementById("cfg-key").value.trim();
+    var to = document.getElementById("cfg-test-email").value.trim();
+    if (!serviceId || !templateId || !publicKey) { setStatus("Fill in all three EmailJS keys first.", "err"); return; }
+    if (!validEmail(to)) { setStatus("Enter a valid email to send the test to.", "err"); return; }
+    if (!window.emailjs) { setStatus("Email library didn't load — check your connection.", "err"); return; }
+
+    var m = currentMeeting();
+    var when = (m.chosen ? labelFromKey(m.chosen) : "Wed 10am–11am") + " (" + TZ_LABEL + ")";
+    var attendees = m.people.length ? m.people.map(function (p) { return p.name; }).join(", ") : "You";
+    var btn = document.getElementById("cfg-test-btn");
+    btn.disabled = true;
+    setStatus("Sending test…", "");
+    try { emailjs.init({ publicKey: publicKey }); } catch (e) {}
+    emailjs.send(serviceId, templateId, {
+      to_email: to, to_name: "there",
+      meeting_name: (m.name || "Test meeting") + " (test)", meeting_time: when, attendees: attendees
+    }).then(function () {
+      setStatus("Test sent to " + to + " — check the inbox.", "ok");
+    }, function (err) {
+      console.warn("EmailJS test error:", err);
+      setStatus("Test failed: " + (err && err.text ? err.text : "check your keys & allowed origins") + ".", "err");
+    }).then(function () { btn.disabled = false; });
+  }
+
   // ---- Calendar (.ics) --------------------------------------------------
   // Build an invite for the chosen weekday/hour in the *upcoming* week.
   function downloadIcs() {
@@ -811,6 +848,7 @@
   document.getElementById("send-btn").addEventListener("click", sendReminders);
   document.getElementById("ics-btn").addEventListener("click", downloadIcs);
   document.getElementById("cfg-save").addEventListener("click", saveEmailConfig);
+  document.getElementById("cfg-test-btn").addEventListener("click", sendTest);
 
   document.getElementById("clear-btn").addEventListener("click", function () {
     var m = currentMeeting();

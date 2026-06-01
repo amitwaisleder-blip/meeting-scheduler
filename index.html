@@ -151,8 +151,10 @@
         </form>
         <ul class="people" id="people-list"></ul>
         <div class="hint" id="hint">
-          Add people, then click a name to mark when <b>they're</b> free.
-          Click or drag across the grid to toggle slots.
+          Click <b>your name</b> (or add it), then click or drag across the grid to
+          mark when you're free. Hit <b>🔗 Share link</b> to send everyone a link that
+          carries the whole group's availability — they open it, click their own name,
+          add their times, and re-share.
         </div>
       </div>
 
@@ -166,7 +168,10 @@
     <div class="card">
       <div class="grid-head">
         <div class="editing" id="editing-label">Add or select a person to edit availability</div>
-        <button class="ghost" id="clear-btn" title="Remove everyone and start over">Reset all</button>
+        <div style="display:flex; gap:8px;">
+          <button id="share-btn" title="Copy a link that carries everyone's availability">🔗 Share link</button>
+          <button class="ghost" id="clear-btn" title="Remove everyone and start over">Reset all</button>
+        </div>
       </div>
       <table class="schedule" id="schedule"></table>
       <div class="legend">
@@ -215,6 +220,69 @@
       data.avail = data.avail || {};
       return data;
     } catch (e) { return null; }
+  }
+
+  // ---- Share-link encoding ----------------------------------------------
+  // The full schedule is packed into the URL hash (#s=…) so it can be passed
+  // from person to person with no server. Opening a link merges its data into
+  // whatever is already here, deduping people by name and unioning slots — so
+  // everyone clicks their own name, adds their times, and re-shares.
+  function b64urlEncode(s) {
+    return btoa(unescape(encodeURIComponent(s)))
+      .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+  function b64urlDecode(s) {
+    s = s.replace(/-/g, "+").replace(/_/g, "/");
+    while (s.length % 4) s += "=";
+    return decodeURIComponent(escape(atob(s)));
+  }
+  function encodeState(st) {
+    var compact = {
+      p: st.people.map(function (p) { return { n: p.name, c: p.color }; }),
+      a: st.people.map(function (p) {
+        var bag = st.avail[p.id] || {};
+        return Object.keys(bag).map(function (k) {
+          var parts = k.split("-");
+          var di = DAYS.indexOf(parts[0]);
+          return di * 100 + parseInt(parts[1], 10); // dayIdx*100 + hour
+        });
+      })
+    };
+    return b64urlEncode(JSON.stringify(compact));
+  }
+  function decodeState(str) {
+    var c = JSON.parse(b64urlDecode(str));
+    var people = [], avail = {};
+    (c.p || []).forEach(function (pp, i) {
+      var id = uid();
+      people.push({ id: id, name: pp.n, color: pp.c || PALETTE[i % PALETTE.length] });
+      var bag = {};
+      (c.a[i] || []).forEach(function (n) {
+        var di = Math.floor(n / 100), h = n % 100;
+        if (DAYS[di]) bag[slotKey(DAYS[di], h)] = true;
+      });
+      avail[id] = bag;
+    });
+    return { people: people, avail: avail };
+  }
+  function mergeIncoming(incoming) {
+    incoming.people.forEach(function (ip) {
+      var slots = incoming.avail[ip.id] || {};
+      var existing = state.people.find(function (p) {
+        return p.name.toLowerCase() === ip.name.toLowerCase();
+      });
+      if (existing) {
+        var bag = state.avail[existing.id] || (state.avail[existing.id] = {});
+        Object.keys(slots).forEach(function (k) { bag[k] = true; });
+      } else {
+        var np = { id: uid(), name: ip.name, color: nextColor() };
+        state.people.push(np);
+        state.avail[np.id] = Object.assign({}, slots);
+      }
+    });
+  }
+  function shareUrl() {
+    return location.origin + location.pathname + "#s=" + encodeState(state);
   }
 
   // ---- Helpers ----------------------------------------------------------
@@ -519,6 +587,25 @@
     }
   });
 
+  document.getElementById("share-btn").addEventListener("click", function (e) {
+    var btn = e.currentTarget;
+    if (!state.people.length) { flashHint(); return; }
+    var url = shareUrl();
+    function done(label) {
+      var orig = "🔗 Share link";
+      btn.textContent = label;
+      setTimeout(function () { btn.textContent = orig; }, 1600);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(url).then(
+        function () { done("✓ Link copied"); },
+        function () { prompt("Copy this link to share:", url); }
+      );
+    } else {
+      prompt("Copy this link to share:", url);
+    }
+  });
+
   document.getElementById("export-link").addEventListener("click", function (e) {
     e.preventDefault();
     var total = state.people.length;
@@ -571,6 +658,22 @@
       var span = document.createElement("span");
       span.style.background = heatColor(i, steps) || "var(--panel-2)";
       scale.appendChild(span);
+    }
+  })();
+
+  // ---- Import a shared link, if present ---------------------------------
+  (function importFromUrl() {
+    var m = location.hash.match(/[#&]s=([^&]+)/);
+    if (!m) return;
+    try {
+      mergeIncoming(decodeState(m[1]));
+      if (!activePerson() && state.people.length) {
+        state.activeId = state.people[state.people.length - 1].id;
+      }
+      // Strip the payload so a refresh doesn't re-import it.
+      history.replaceState(null, "", location.pathname + location.search);
+    } catch (err) {
+      console.warn("Could not read shared link:", err);
     }
   })();
 

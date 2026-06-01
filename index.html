@@ -127,13 +127,14 @@
   .schedule th { font-size: 12px; color: var(--muted); font-weight: 600; padding: 6px 4px; text-align: center; }
   .schedule th.time-col { width: 64px; text-align: right; padding-right: 10px; }
   .schedule td.time-label { font-size: 11.5px; color: var(--muted); text-align: right; padding-right: 10px; white-space: nowrap; vertical-align: middle; }
+  .schedule td.time-label.half { font-size: 10px; opacity: .5; }
 
   .cell {
-    height: 38px; border-radius: 7px; border: 1px solid var(--line); background: var(--panel-2);
+    height: 26px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel-2);
     cursor: pointer; position: relative; transition: background .12s, border-color .12s, transform .05s;
     text-align: center; vertical-align: middle;
   }
-  td.cellwrap { padding: 3px; }
+  td.cellwrap { padding: 2px; }
   .cell:hover { border-color: var(--accent); }
   .cell .num { font-size: 12px; font-weight: 700; color: inherit; pointer-events: none; }
   .cell.mine { outline: 2px solid var(--accent); outline-offset: -2px; }
@@ -278,8 +279,9 @@
             add an email service and a template, then paste the three IDs above (stored only in your browser).
             Your template should use these variables:
             <code>{{to_email}}</code> <code>{{to_name}}</code> <code>{{meeting_name}}</code>
-            <code>{{meeting_time}}</code> <code>{{attendees}}</code>, and set the template's
-            “To email” field to <code>{{to_email}}</code>.
+            <code>{{meeting_time}}</code> <code>{{attendees}}</code>, plus
+            <code>{{outlook_link}}</code> and <code>{{google_link}}</code> for the “add to calendar”
+            buttons, and set the template's “To email” field to <code>{{to_email}}</code>.
           </div>
         </details>
       </div>
@@ -320,11 +322,13 @@
 
   // ---- Configuration ----------------------------------------------------
   var DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"];
-  var START_HOUR = 9;   // 9am
-  var END_HOUR = 18;    // 6pm (slots are 9–10 … 17–18)
+  var START_MIN = 7 * 60;    // 7:00am
+  var END_MIN = 20 * 60;     // 8:00pm (last slot starts 7:30pm)
+  var STEP_MIN = 30;         // half-hour slots
   var TZ_LABEL = "Eastern Time (ET)";
   var TZ_SHORT = "ET";
-  var STORAGE_KEY = "overlap.scheduler.v2";
+  var STORAGE_KEY = "overlap.scheduler.v3";
+  var LEGACY_V2 = "overlap.scheduler.v2";
   var LEGACY_KEY = "overlap.scheduler.v1";
   var PALETTE = [
     "#4d5d33", "#b8932f", "#7d9b5c", "#a0522d", "#5b8a8a",
@@ -349,15 +353,28 @@
   function save() {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) {}
   }
+  // Rewrite any legacy hourly slot keys ("Wed-10") to minute keys ("Wed-600").
+  // Idempotent: minute keys (>= 60) are left unchanged.
+  function migrateState(data) {
+    (data.meetings || []).forEach(function (mt) {
+      var fixed = {};
+      Object.keys(mt.avail || {}).forEach(function (pid) {
+        var bag = mt.avail[pid] || {}, nb = {};
+        Object.keys(bag).forEach(function (k) { nb[migrateKey(k)] = true; });
+        fixed[pid] = nb;
+      });
+      mt.avail = fixed;
+      if (mt.chosen) mt.chosen = migrateKey(mt.chosen);
+    });
+    data.email = data.email || { serviceId: "", templateId: "", publicKey: "" };
+    return data;
+  }
   function load() {
     try {
-      var raw = localStorage.getItem(STORAGE_KEY);
+      var raw = localStorage.getItem(STORAGE_KEY) || localStorage.getItem(LEGACY_V2);
       if (raw) {
         var data = JSON.parse(raw);
-        if (data && Array.isArray(data.meetings) && data.meetings.length) {
-          data.email = data.email || { serviceId: "", templateId: "", publicKey: "" };
-          return data;
-        }
+        if (data && Array.isArray(data.meetings) && data.meetings.length) return migrateState(data);
       }
       // One-time migration from the single-meeting v1 format.
       var legacy = localStorage.getItem(LEGACY_KEY);
@@ -370,7 +387,7 @@
           });
           m.avail = old.avail || {};
           m.activeId = old.activeId || null;
-          return { meetings: [m], currentId: m.id, email: { serviceId: "", templateId: "", publicKey: "" } };
+          return migrateState({ meetings: [m], currentId: m.id, email: { serviceId: "", templateId: "", publicKey: "" } });
         }
       }
     } catch (e) {}
@@ -379,8 +396,10 @@
 
   // ---- Helpers ----------------------------------------------------------
   function uid() { return "p" + Math.random().toString(36).slice(2, 9); }
-  function slotKey(day, hour) { return day + "-" + hour; }
-  function parseKey(key) { var i = key.lastIndexOf("-"); return { day: key.slice(0, i), hour: parseInt(key.slice(i + 1), 10) }; }
+  function slotKey(day, min) { return day + "-" + min; }
+  function parseKey(key) { var i = key.lastIndexOf("-"); return { day: key.slice(0, i), min: parseInt(key.slice(i + 1), 10) }; }
+  // Convert a legacy hourly key ("Wed-10") to the minute-based key ("Wed-600").
+  function migrateKey(key) { var p = parseKey(key); return p.min < 60 ? slotKey(p.day, p.min * 60) : key; }
   function currentMeeting() {
     return state.meetings.find(function (m) { return m.id === state.currentId; }) || state.meetings[0];
   }
@@ -389,14 +408,18 @@
     for (var i = 0; i < PALETTE.length; i++) if (used.indexOf(PALETTE[i]) === -1) return PALETTE[i];
     return PALETTE[m.people.length % PALETTE.length];
   }
-  function fmtHour(h) { var ap = h < 12 ? "am" : "pm", hr = h % 12; if (hr === 0) hr = 12; return hr + ap; }
-  function slotLabel(day, hour) { return day + " " + fmtHour(hour) + "–" + fmtHour(hour + 1); }
-  function labelFromKey(key) { var p = parseKey(key); return slotLabel(p.day, p.hour); }
+  function fmtTime(min) {
+    var h = Math.floor(min / 60), m = min % 60, ap = h < 12 ? "am" : "pm", hr = h % 12;
+    if (hr === 0) hr = 12;
+    return m === 0 ? (hr + ap) : (hr + ":" + (m < 10 ? "0" : "") + m + ap);
+  }
+  function slotLabel(day, min) { return day + " " + fmtTime(min) + "–" + fmtTime(min + STEP_MIN); }
+  function labelFromKey(key) { var p = parseKey(key); return slotLabel(p.day, p.min); }
   function activePerson(m) { return m.people.find(function (p) { return p.id === m.activeId; }) || null; }
   function validEmail(e) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((e || "").trim()); }
 
-  function tallyForSlot(m, day, hour) {
-    var key = slotKey(day, hour), names = [];
+  function tallyForSlot(m, day, min) {
+    var key = slotKey(day, min), names = [];
     m.people.forEach(function (p) { if (m.avail[p.id] && m.avail[p.id][key]) names.push(p.name); });
     return names;
   }
@@ -430,7 +453,7 @@
       p: m.people.map(function (p) { return { n: p.name, e: p.email || "", c: p.color }; }),
       a: m.people.map(function (p) {
         var bag = m.avail[p.id] || {};
-        return Object.keys(bag).map(function (k) { var x = parseKey(k); return DAYS.indexOf(x.day) * 100 + x.hour; });
+        return Object.keys(bag).map(function (k) { var x = parseKey(k); return DAYS.indexOf(x.day) * 10000 + x.min; });
       })
     };
     return b64urlEncode(JSON.stringify(compact));
@@ -442,7 +465,12 @@
       var id = uid();
       people.push({ id: id, name: pp.n, email: pp.e || "", color: pp.c || PALETTE[i % PALETTE.length] });
       var bag = {};
-      (c.a[i] || []).forEach(function (n) { var di = Math.floor(n / 100), h = n % 100; if (DAYS[di]) bag[slotKey(DAYS[di], h)] = true; });
+      (c.a[i] || []).forEach(function (n) {
+        var di, min;
+        if (n < 1000) { di = Math.floor(n / 100); min = (n % 100) * 60; } // legacy hourly encoding
+        else { di = Math.floor(n / 10000); min = n % 10000; }
+        if (DAYS[di]) bag[slotKey(DAYS[di], min)] = true;
+      });
       avail[id] = bag;
     });
     return { name: c.m || "Shared meeting", people: people, avail: avail };
@@ -540,26 +568,27 @@
 
     var maxCount = 0;
     for (var d = 0; d < DAYS.length; d++)
-      for (var h = START_HOUR; h < END_HOUR; h++)
-        maxCount = Math.max(maxCount, tallyForSlot(m, DAYS[d], h).length);
+      for (var t = START_MIN; t < END_MIN; t += STEP_MIN)
+        maxCount = Math.max(maxCount, tallyForSlot(m, DAYS[d], t).length);
 
     var html = "<thead><tr><th class='time-col'></th>";
     DAYS.forEach(function (day) { html += "<th>" + day + "</th>"; });
     html += "</tr></thead><tbody>";
 
-    for (var hour = START_HOUR; hour < END_HOUR; hour++) {
-      html += "<tr><td class='time-label'>" + fmtHour(hour) + "</td>";
+    for (var min = START_MIN; min < END_MIN; min += STEP_MIN) {
+      var onHour = (min % 60 === 0);
+      html += "<tr><td class='time-label" + (onHour ? "" : " half") + "'>" + fmtTime(min) + "</td>";
       for (var di = 0; di < DAYS.length; di++) {
-        var day = DAYS[di], key = slotKey(day, hour);
-        var names = tallyForSlot(m, day, hour), count = names.length;
+        var day = DAYS[di], key = slotKey(day, min);
+        var names = tallyForSlot(m, day, min), count = names.length;
         var mine = active && m.avail[active.id] && m.avail[active.id][key];
         var isBest = maxCount > 1 && count === maxCount;
         var isChosen = m.chosen === key;
         var classes = "cell" + (mine ? " mine" : "") + (isBest ? " best" : "") + (isChosen ? " chosen" : "");
         var bg = heatColor(count, total);
         var style = bg ? " style='background:" + bg + ";color:" + heatText(count, total) + "'" : "";
-        var title = count + " of " + total + " free" + (names.length ? " — " + names.join(", ") : "");
-        html += "<td class='cellwrap'><div class='" + classes + "' data-day='" + day + "' data-hour='" + hour +
+        var title = fmtTime(min) + " · " + count + " of " + total + " free" + (names.length ? " — " + names.join(", ") : "");
+        html += "<td class='cellwrap'><div class='" + classes + "' data-day='" + day + "' data-min='" + min +
                 "'" + style + " title='" + escapeHtml(title) + "'>" +
                 (count > 0 ? "<span class='num'>" + count + "</span>" : "") + "</div></td>";
       }
@@ -571,14 +600,14 @@
   function rankedSlots(m) {
     var slots = [];
     for (var di = 0; di < DAYS.length; di++)
-      for (var h = START_HOUR; h < END_HOUR; h++) {
-        var names = tallyForSlot(m, DAYS[di], h);
-        if (names.length) slots.push({ key: slotKey(DAYS[di], h), day: DAYS[di], dayIdx: di, hour: h, names: names, count: names.length });
+      for (var t = START_MIN; t < END_MIN; t += STEP_MIN) {
+        var names = tallyForSlot(m, DAYS[di], t);
+        if (names.length) slots.push({ key: slotKey(DAYS[di], t), day: DAYS[di], dayIdx: di, min: t, names: names, count: names.length });
       }
     slots.sort(function (a, b) {
       if (b.count !== a.count) return b.count - a.count;
       if (a.dayIdx !== b.dayIdx) return a.dayIdx - b.dayIdx;
-      return a.hour - b.hour;
+      return a.min - b.min;
     });
     return slots;
   }
@@ -602,7 +631,7 @@
 
       var rank = document.createElement("span"); rank.className = "rank"; rank.textContent = i + 1;
       var mid = document.createElement("div"); mid.className = "mid";
-      var when = document.createElement("div"); when.className = "when"; when.textContent = slotLabel(s.day, s.hour);
+      var when = document.createElement("div"); when.className = "when"; when.textContent = slotLabel(s.day, s.min);
       var who = document.createElement("div"); who.className = "who"; who.textContent = s.names.join(", ");
       mid.appendChild(when); mid.appendChild(who);
       var tally = document.createElement("span"); tally.className = "tally"; tally.textContent = s.count + "/" + total;
@@ -708,6 +737,54 @@
     save();
     setStatus("Email keys saved in this browser.", "ok");
   }
+  // ---- Date / timezone helpers ------------------------------------------
+  // Offset (minutes) of a named timezone at a given instant, via Intl.
+  function tzOffsetMinutes(tz, date) {
+    var dtf = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz, hour12: false, year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit"
+    });
+    var parts = {};
+    dtf.formatToParts(date).forEach(function (p) { parts[p.type] = p.value; });
+    var asUTC = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour % 24, parts.minute, parts.second);
+    return (asUTC - date.getTime()) / 60000;
+  }
+  // Convert an Eastern-Time wall clock (y,mo,d,h,mi) into the correct UTC instant.
+  function etWallToUtc(y, mo, d, h, mi) {
+    var guess = Date.UTC(y, mo, d, h, mi, 0);
+    var off = tzOffsetMinutes("America/New_York", new Date(guess));
+    return new Date(guess - off * 60000);
+  }
+  // Start/end Date (UTC) for the chosen slot, on its next upcoming weekday.
+  function chosenEventTimes(m) {
+    var p = parseKey(m.chosen), dayIdx = DAYS.indexOf(p.day);
+    var now = new Date();
+    var diff = ((dayIdx + 1) - now.getDay() + 7) % 7;
+    if (diff === 0) diff = 7;
+    var base = new Date(now.getFullYear(), now.getMonth(), now.getDate() + diff);
+    var h = Math.floor(p.min / 60), mi = p.min % 60;
+    var startUtc = etWallToUtc(base.getFullYear(), base.getMonth(), base.getDate(), h, mi);
+    return { start: startUtc, end: new Date(startUtc.getTime() + STEP_MIN * 60000) };
+  }
+  function utcStamp(dt) {
+    function z(n) { return (n < 10 ? "0" : "") + n; }
+    return dt.getUTCFullYear() + z(dt.getUTCMonth() + 1) + z(dt.getUTCDate()) + "T" +
+           z(dt.getUTCHours()) + z(dt.getUTCMinutes()) + "00Z";
+  }
+  // One-click "add to calendar" links for the chosen time (empty if none chosen).
+  function calendarLinks(m) {
+    if (!m.chosen) return { outlook: "", google: "" };
+    var t = chosenEventTimes(m);
+    var subject = encodeURIComponent(m.name || "Meeting");
+    var details = encodeURIComponent("Scheduled via Overlap (Gencom). Attendees: " +
+      m.people.map(function (x) { return x.name; }).join(", "));
+    var outlook = "https://outlook.office.com/calendar/0/deeplink/compose?path=/calendar/action/compose&rru=addevent" +
+      "&subject=" + subject + "&startdt=" + t.start.toISOString() + "&enddt=" + t.end.toISOString() + "&body=" + details;
+    var google = "https://calendar.google.com/calendar/render?action=TEMPLATE&text=" + subject +
+      "&dates=" + utcStamp(t.start) + "/" + utcStamp(t.end) + "&details=" + details;
+    return { outlook: outlook, google: google };
+  }
+
   function sendReminders() {
     var m = currentMeeting();
     if (!m.chosen) { setStatus("Pick a meeting time first (click one in the list).", "err"); return; }
@@ -723,6 +800,7 @@
 
     var when = labelFromKey(m.chosen) + " (" + TZ_LABEL + ")";
     var attendees = m.people.map(function (p) { return p.name; }).join(", ");
+    var links = calendarLinks(m);
     var btn = document.getElementById("send-btn");
     btn.disabled = true;
     var sent = 0, failed = 0, total = recipients.length;
@@ -739,7 +817,8 @@
       var p = recipients[i];
       emailjs.send(cfg.serviceId, cfg.templateId, {
         to_email: p.email, to_name: p.name,
-        meeting_name: m.name || "Meeting", meeting_time: when, attendees: attendees
+        meeting_name: m.name || "Meeting", meeting_time: when, attendees: attendees,
+        outlook_link: links.outlook, google_link: links.google
       }).then(function () { sent++; }, function (err) { failed++; console.warn("EmailJS error:", err); })
         .then(function () { setStatus("Sending " + (sent + failed) + "/" + total + "…", ""); next(i + 1); });
     })(0);
@@ -756,15 +835,17 @@
     if (!window.emailjs) { setStatus("Email library didn't load — check your connection.", "err"); return; }
 
     var m = currentMeeting();
-    var when = (m.chosen ? labelFromKey(m.chosen) : "Wed 10am–11am") + " (" + TZ_LABEL + ")";
+    var when = (m.chosen ? labelFromKey(m.chosen) : "Wed 10am–10:30am") + " (" + TZ_LABEL + ")";
     var attendees = m.people.length ? m.people.map(function (p) { return p.name; }).join(", ") : "You";
+    var links = calendarLinks(m);
     var btn = document.getElementById("cfg-test-btn");
     btn.disabled = true;
     setStatus("Sending test…", "");
     try { emailjs.init({ publicKey: publicKey }); } catch (e) {}
     emailjs.send(serviceId, templateId, {
       to_email: to, to_name: "there",
-      meeting_name: (m.name || "Test meeting") + " (test)", meeting_time: when, attendees: attendees
+      meeting_name: (m.name || "Test meeting") + " (test)", meeting_time: when, attendees: attendees,
+      outlook_link: links.outlook, google_link: links.google
     }).then(function () {
       setStatus("Test sent to " + to + " — check the inbox.", "ok");
     }, function (err) {
@@ -783,8 +864,8 @@
     var now = new Date();
     var diff = ((dayIdx + 1) - now.getDay() + 7) % 7; // JS: 0=Sun,1=Mon… target weekday
     if (diff === 0) diff = 7; // always schedule the next occurrence
-    var d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + diff, p.hour, 0, 0);
-    var end = new Date(d.getTime() + 60 * 60 * 1000);
+    var d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + diff, Math.floor(p.min / 60), p.min % 60, 0);
+    var end = new Date(d.getTime() + STEP_MIN * 60 * 1000);
     function fmt(dt) {
       function z(n) { return (n < 10 ? "0" : "") + n; }
       return dt.getFullYear() + z(dt.getMonth() + 1) + z(dt.getDate()) + "T" + z(dt.getHours()) + z(dt.getMinutes()) + "00";
@@ -816,13 +897,13 @@
     var cell = e.target.closest(".cell"); if (!cell) return;
     if (!activePerson(currentMeeting())) { flashHint(); return; }
     e.preventDefault(); dragging = true;
-    dragValue = toggleSlot(cell.dataset.day, parseInt(cell.dataset.hour, 10));
+    dragValue = toggleSlot(cell.dataset.day, parseInt(cell.dataset.min, 10));
     renderAll();
   });
   scheduleEl.addEventListener("mouseover", function (e) {
     if (!dragging) return;
     var cell = e.target.closest(".cell"); if (!cell) return;
-    toggleSlot(cell.dataset.day, parseInt(cell.dataset.hour, 10), dragValue);
+    toggleSlot(cell.dataset.day, parseInt(cell.dataset.min, 10), dragValue);
     renderAll();
   });
   document.addEventListener("mouseup", function () { dragging = false; dragValue = null; });
@@ -831,7 +912,7 @@
     var cell = el && el.closest ? el.closest(".cell") : null; if (!cell) return;
     if (!activePerson(currentMeeting())) { flashHint(); return; }
     e.preventDefault();
-    toggleSlot(cell.dataset.day, parseInt(cell.dataset.hour, 10));
+    toggleSlot(cell.dataset.day, parseInt(cell.dataset.min, 10));
     renderAll();
   }, { passive: false });
 
@@ -874,7 +955,7 @@
     var m = currentMeeting(), total = m.people.length;
     var lines = [(m.name || "Meeting") + " — best times (" + total + " people), all " + TZ_LABEL + ":"];
     rankedSlots(m).slice(0, 6).forEach(function (s, i) {
-      lines.push((i + 1) + ". " + slotLabel(s.day, s.hour) + " — " + s.count + "/" + total + " (" + s.names.join(", ") + ")");
+      lines.push((i + 1) + ". " + slotLabel(s.day, s.min) + " — " + s.count + "/" + total + " (" + s.names.join(", ") + ")");
     });
     var text = lines.join("\n");
     if (navigator.clipboard && navigator.clipboard.writeText) {
